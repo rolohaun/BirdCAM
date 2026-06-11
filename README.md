@@ -50,7 +50,7 @@ pio device monitor
 
 ## Snapshot Viewer
 
-The web interface stays idle until the user clicks `Snapshot`. A click captures five JPEGs, one every five seconds, and keeps those images in a thumbnail strip. It does not keep polling when nobody is watching.
+The web interface stays idle until the user clicks `Snapshot`. A click captures five JPEGs, one every three seconds, and keeps those images in a thumbnail strip. It does not keep polling when nobody is watching.
 
 ## OTA Updates
 

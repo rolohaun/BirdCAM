@@ -26,7 +26,7 @@ static const char *DEFAULT_WIFI_PASSWORD = "";
 
 static const char *AP_SSID = "BirdCAM";
 static const char *AP_PASSWORD = "birdcam123";
-static const char *FIRMWARE_VERSION = "0.2.9";
+static const char *FIRMWARE_VERSION = "0.2.10";
 static const char *OTA_MANIFEST_URL = "https://raw.githubusercontent.com/rolohaun/BirdCAM/main/firmware/manifest.json";
 
 // Highest OV3660 snapshot defaults. QXGA is demanding, but snapshots give it
@@ -36,7 +36,7 @@ static const int STREAM_JPEG_QUALITY = 10;  // 10 is sharper/slower, 30 is small
 static const int CPU_FREQ_MHZ = 80;
 static const int CAMERA_XCLK_HZ = 10000000;
 static const unsigned long IP_PRINT_INTERVAL_MS = 300000;
-static const unsigned long SNAPSHOT_INTERVAL_MS = 5000;
+static const unsigned long SNAPSHOT_INTERVAL_MS = 3000;
 static const int SNAPSHOT_HISTORY_COUNT = 5;
 static const size_t OTA_BUFFER_SIZE = 1024;
 static const int OTA_TASK_STACK_SIZE = 16384;
@@ -128,9 +128,9 @@ static const char INDEX_HTML[] PROGMEM = R"rawliteral(
     select, button, a.button { border: 1px solid #3c4650; background: #242b31; color: #f5f7f9; border-radius: 6px; padding: 9px 12px; font-size: 14px; text-decoration: none; cursor: pointer; }
     select:hover, button:hover, a.button:hover { background: #303941; }
     [hidden] { display: none !important; }
-    .viewer { display: grid; grid-template-rows: 1fr auto; gap: 10px; padding: 12px; min-height: 0; }
-    .stage { display: grid; place-items: center; min-height: 0; }
-    #current { width: min(100%, 1100px); max-height: calc(100vh - 178px); object-fit: contain; background: #050607; border: 1px solid #2b3138; }
+    .viewer { display: grid; grid-template-rows: auto auto; align-content: start; gap: 8px; padding: 6px 12px 10px; min-height: 0; }
+    .stage { display: grid; place-items: start center; min-height: 0; }
+    #current { width: min(100%, 1100px); max-height: calc(100vh - 150px); object-fit: contain; background: #050607; border: 1px solid #2b3138; }
     .history { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; width: min(100%, 1100px); margin: 0 auto; }
     .history img { width: 100%; aspect-ratio: 4 / 3; object-fit: cover; background: #050607; border: 1px solid #2b3138; opacity: 0.72; cursor: pointer; }
     .history img.active { opacity: 1; border-color: #94a3b8; }
@@ -139,6 +139,13 @@ static const char INDEX_HTML[] PROGMEM = R"rawliteral(
     .progress-bar { height: 10px; overflow: hidden; background: #0b0d0f; border: 1px solid #3c4650; border-radius: 999px; }
     .progress-fill { height: 100%; width: 0%; background: #9ccfd8; transition: width 180ms ease; }
     .progress-text { font-size: 13px; color: #f5f7f9; }
+    @media (max-width: 720px) {
+      header { padding: 10px 12px; align-items: flex-start; }
+      .controls { gap: 6px; }
+      select, button, a.button { padding: 8px 10px; }
+      .viewer { padding-top: 4px; }
+      #current { max-height: calc(100vh - 132px); }
+    }
   </style>
 </head>
 <body>
@@ -180,7 +187,7 @@ static const char INDEX_HTML[] PROGMEM = R"rawliteral(
     <div class="progress-text" id="ota-progress-text">Preparing update...</div>
   </div>
   <script>
-    const SNAPSHOT_INTERVAL_MS = 5000;
+    const SNAPSHOT_INTERVAL_MS = 3000;
     const SNAPSHOT_HISTORY_COUNT = 5;
     const framesize = document.getElementById('framesize');
     const snapshot = document.getElementById('snapshot');
@@ -288,7 +295,7 @@ static const char INDEX_HTML[] PROGMEM = R"rawliteral(
           return;
         }
 
-        status.textContent = 'Waiting 5 seconds for snapshot ' + (captured + 1) + ' of ' + SNAPSHOT_HISTORY_COUNT + '...';
+        status.textContent = 'Waiting 3 seconds for snapshot ' + (captured + 1) + ' of ' + SNAPSHOT_HISTORY_COUNT + '...';
         snapshotTimer = setTimeout(runNext, SNAPSHOT_INTERVAL_MS);
       };
 
