@@ -25,7 +25,7 @@ static const char *DEFAULT_WIFI_PASSWORD = "";
 
 static const char *AP_SSID = "BirdCAM";
 static const char *AP_PASSWORD = "birdcam123";
-static const char *FIRMWARE_VERSION = "0.2.6";
+static const char *FIRMWARE_VERSION = "0.2.7";
 static const char *OTA_MANIFEST_URL = "https://raw.githubusercontent.com/rolohaun/BirdCAM/main/firmware/manifest.json";
 
 // Highest OV3660 snapshot defaults. QXGA is demanding, but snapshots give it
@@ -145,7 +145,7 @@ static const char INDEX_HTML[] PROGMEM = R"rawliteral(
     <header>
       <div>
         <h1>BirdCAM</h1>
-        <div class="status" id="status">Snapshots every 5 seconds</div>
+        <div class="status" id="status">Idle</div>
         <div class="status">Firmware <span id="firmware-version">...</span></div>
       </div>
       <div class="controls">
@@ -172,10 +172,9 @@ static const char INDEX_HTML[] PROGMEM = R"rawliteral(
             <option value="32">Fastest</option>
           </select>
         </label>
-        <a class="button" href="/capture" target="_blank">Snapshot</a>
+        <button id="snapshot" type="button">Snapshot</button>
         <button id="update-check" type="button">Check Update</button>
         <button id="update-install" type="button" hidden>Install Update</button>
-        <button id="reload" type="button">Capture Now</button>
       </div>
     </header>
     <section class="viewer">
@@ -194,9 +193,9 @@ static const char INDEX_HTML[] PROGMEM = R"rawliteral(
     const SNAPSHOT_HISTORY_COUNT = 5;
     const framesize = document.getElementById('framesize');
     const quality = document.getElementById('quality');
+    const snapshot = document.getElementById('snapshot');
     const updateCheck = document.getElementById('update-check');
     const updateInstall = document.getElementById('update-install');
-    const reload = document.getElementById('reload');
     const current = document.getElementById('current');
     const history = document.getElementById('history');
     const status = document.getElementById('status');
@@ -208,6 +207,7 @@ static const char INDEX_HTML[] PROGMEM = R"rawliteral(
     let snapshotTimer = null;
     let otaPollTimer = null;
     let loadingSnapshot = false;
+    let captureSequenceRunning = false;
 
     function captureUrl() {
       return '/capture?t=' + Date.now();
@@ -232,10 +232,10 @@ static const char INDEX_HTML[] PROGMEM = R"rawliteral(
       });
     }
 
-    async function captureSnapshot() {
-      if (loadingSnapshot || document.hidden) return;
+    async function captureSnapshot(sequenceIndex = null) {
+      if (loadingSnapshot || document.hidden) return false;
       loadingSnapshot = true;
-      status.textContent = 'Capturing...';
+      status.textContent = sequenceIndex ? 'Capturing ' + sequenceIndex + ' of ' + SNAPSHOT_HISTORY_COUNT + '...' : 'Capturing...';
 
       try {
         const response = await fetch(captureUrl(), { cache: 'no-store' });
@@ -252,16 +252,57 @@ static const char INDEX_HTML[] PROGMEM = R"rawliteral(
         renderHistory();
         setActiveSnapshot(0);
         status.textContent = 'Last capture ' + new Date().toLocaleTimeString();
+        return true;
       } catch (err) {
         status.textContent = err.message;
+        return false;
       } finally {
         loadingSnapshot = false;
       }
     }
 
     function startSnapshots() {
-      if (snapshotTimer) clearInterval(snapshotTimer);
-      snapshotTimer = setInterval(captureSnapshot, SNAPSHOT_INTERVAL_MS);
+      if (snapshotTimer) clearTimeout(snapshotTimer);
+      snapshotTimer = null;
+
+      if (captureSequenceRunning) return;
+      captureSequenceRunning = true;
+      let captured = 0;
+      snapshot.disabled = true;
+
+      const runNext = async () => {
+        if (document.hidden) {
+          captureSequenceRunning = false;
+          snapshot.disabled = false;
+          snapshotTimer = null;
+          status.textContent = 'Snapshot sequence paused';
+          return;
+        }
+
+        const nextIndex = captured + 1;
+        const ok = await captureSnapshot(nextIndex);
+        if (!ok) {
+          captureSequenceRunning = false;
+          snapshot.disabled = false;
+          snapshotTimer = null;
+          return;
+        }
+
+        captured = nextIndex;
+
+        if (captured >= SNAPSHOT_HISTORY_COUNT || document.hidden) {
+          captureSequenceRunning = false;
+          snapshot.disabled = false;
+          snapshotTimer = null;
+          status.textContent = captured >= SNAPSHOT_HISTORY_COUNT ? 'Captured 5 snapshots' : 'Snapshot sequence paused';
+          return;
+        }
+
+        status.textContent = 'Waiting 5 seconds for snapshot ' + (captured + 1) + ' of ' + SNAPSHOT_HISTORY_COUNT + '...';
+        snapshotTimer = setTimeout(runNext, SNAPSHOT_INTERVAL_MS);
+      };
+
+      runNext();
     }
 
     function setOtaProgress(info) {
@@ -294,7 +335,8 @@ static const char INDEX_HTML[] PROGMEM = R"rawliteral(
           } else {
             otaProgressText.textContent = 'Update failed - ' + (info.message || 'Unknown error');
             status.textContent = otaProgressText.textContent;
-            startSnapshots();
+            captureSequenceRunning = false;
+            snapshot.disabled = false;
           }
         }
       } catch (err) {
@@ -341,7 +383,6 @@ static const char INDEX_HTML[] PROGMEM = R"rawliteral(
       const response = await fetch('/settings?' + params.toString());
       if (response.ok) {
         status.textContent = 'Settings applied';
-        captureSnapshot();
       } else {
         status.textContent = 'Settings failed';
       }
@@ -374,7 +415,7 @@ static const char INDEX_HTML[] PROGMEM = R"rawliteral(
       otaProgress.hidden = false;
       otaProgressFill.style.width = '0%';
       otaProgressText.textContent = '0% - Starting update...';
-      if (snapshotTimer) clearInterval(snapshotTimer);
+      if (snapshotTimer) clearTimeout(snapshotTimer);
       try {
         const response = await fetch('/ota/start');
         const info = await response.json();
@@ -384,26 +425,17 @@ static const char INDEX_HTML[] PROGMEM = R"rawliteral(
       } catch (err) {
         status.textContent = err.message;
         otaProgressText.textContent = 'Update failed - ' + err.message;
-        startSnapshots();
+        captureSequenceRunning = false;
+        snapshot.disabled = false;
       }
     });
 
-    reload.addEventListener('click', () => {
-      captureSnapshot();
+    snapshot.addEventListener('click', () => {
       startSnapshots();
-    });
-
-    document.addEventListener('visibilitychange', () => {
-      if (!document.hidden) {
-        captureSnapshot();
-        startSnapshots();
-      }
     });
 
     loadInfo();
     loadSettings();
-    captureSnapshot();
-    startSnapshots();
   </script>
 </body>
 </html>

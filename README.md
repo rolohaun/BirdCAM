@@ -1,6 +1,6 @@
 # BirdCAM ESP32-CAM Snapshot Viewer
 
-This project runs on an ESP32-CAM board with an OV3660 camera and serves a tiny web page that refreshes snapshots every five seconds.
+This project runs on an ESP32-CAM board with an OV3660 camera and serves a tiny web page for user-triggered snapshot bursts.
 
 ## Configure Wi-Fi
 
@@ -50,7 +50,7 @@ pio device monitor
 
 ## Snapshot Viewer
 
-The web interface fetches one JPEG every five seconds and keeps the five most recent snapshots in a thumbnail strip. It pauses snapshot polling when the browser tab is hidden and resumes when the tab is visible again.
+The web interface stays idle until the user clicks `Snapshot`. A click captures five JPEGs, one every five seconds, and keeps those images in a thumbnail strip. It does not keep polling when nobody is watching.
 
 ## OTA Updates
 
@@ -89,7 +89,7 @@ Try `FRAMESIZE_UXGA` if QXGA is unstable, or `FRAMESIZE_VGA` / `FRAMESIZE_QVGA` 
 
 The firmware disables Bluetooth, lowers the CPU clock, enables Wi-Fi modem sleep, lowers the camera XCLK, reduces serial chatter, and starts with lower-bandwidth snapshots.
 
-The web page uses periodic snapshots instead of an always-open MJPEG stream, which greatly reduces Wi-Fi traffic and camera work when someone is watching.
+The web page uses user-triggered snapshot bursts instead of an always-open MJPEG stream, which greatly reduces Wi-Fi traffic and camera work when nobody is watching.
 
 The red power LED on most ESP32-CAM boards is wired directly to the power rail, so firmware cannot turn it off. To remove that draw, you would need to desolder the LED or its series resistor, or cut the LED trace.
 
