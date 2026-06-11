@@ -25,7 +25,7 @@ static const char *DEFAULT_WIFI_PASSWORD = "";
 
 static const char *AP_SSID = "BirdCAM";
 static const char *AP_PASSWORD = "birdcam123";
-static const char *FIRMWARE_VERSION = "0.2.14";
+static const char *FIRMWARE_VERSION = "0.2.15";
 static const char *OTA_MANIFEST_URL = "https://raw.githubusercontent.com/rolohaun/BirdCAM/main/firmware/manifest.json";
 
 // Highest OV3660 snapshot defaults. QXGA is demanding, but snapshots give it
@@ -39,6 +39,7 @@ static const unsigned long SNAPSHOT_INTERVAL_MS = 3000;
 static const int SNAPSHOT_HISTORY_COUNT = 5;
 static const size_t CAPTURE_CHUNK_SIZE = 1024;
 static const size_t OTA_BUFFER_SIZE = 1024;
+static const int OTA_HTTP_ATTEMPTS = 3;
 static const int OTA_TASK_STACK_SIZE = 16384;
 
 // AI Thinker ESP32-CAM pin map. Used by most ESP32-CAM-MB CH340G kits.
@@ -643,72 +644,95 @@ static String sha256_to_hex(const uint8_t hash[32]) {
 }
 
 static bool fetch_ota_manifest(OtaManifest &manifest, String &error) {
-  WiFiClientSecure client;
-  HTTPClient http;
-  client.setInsecure();
-  set_ota_progress("manifest", 5, "Fetching update manifest...");
-
-  http.setTimeout(15000);
-  http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
-
   String manifest_url = String(OTA_MANIFEST_URL) + "?t=" + String(millis());
 
-  if (!http.begin(client, manifest_url)) {
-    error = "Unable to open OTA manifest URL";
-    return false;
+  for (int attempt = 1; attempt <= OTA_HTTP_ATTEMPTS; attempt++) {
+    WiFiClientSecure client;
+    HTTPClient http;
+    client.setInsecure();
+    client.setHandshakeTimeout(30);
+    set_ota_progress("manifest", 5, attempt == 1 ? "Fetching update manifest..." : "Retrying update manifest...");
+
+    http.setTimeout(20000);
+    http.setReuse(false);
+    http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
+
+    if (!http.begin(client, manifest_url)) {
+      error = "Unable to open OTA manifest URL";
+    } else {
+      int code = http.GET();
+      delay(1);
+
+      if (code == HTTP_CODE_OK) {
+        String payload = http.getString();
+        http.end();
+
+        JsonDocument doc;
+        DeserializationError json_error = deserializeJson(doc, payload);
+        if (json_error) {
+          error = "Manifest JSON parse failed";
+        } else {
+          manifest.version = String(doc["version"] | "");
+          manifest.url = String(doc["url"] | "");
+          manifest.sha256 = String(doc["sha256"] | "");
+          manifest.sha256.toLowerCase();
+
+          if (manifest.version.length() == 0 || manifest.url.length() == 0 || manifest.sha256.length() != 64) {
+            error = "Manifest must include version, url, and 64-character sha256";
+          } else {
+            set_ota_progress("manifest", 12, "Manifest loaded: " + manifest.version, manifest.version);
+            return true;
+          }
+        }
+      } else {
+        error = "Manifest request failed: HTTP " + String(code);
+        http.end();
+      }
+    }
+
+    Serial.printf("OTA manifest attempt %d failed: %s\n", attempt, error.c_str());
+    delay(750);
+    yield_to_system();
   }
 
-  int code = http.GET();
-  delay(1);
-  if (code != HTTP_CODE_OK) {
-    error = "Manifest request failed: HTTP " + String(code);
-    http.end();
-    return false;
-  }
-
-  String payload = http.getString();
-  http.end();
-
-  JsonDocument doc;
-  DeserializationError json_error = deserializeJson(doc, payload);
-  if (json_error) {
-    error = "Manifest JSON parse failed";
-    return false;
-  }
-
-  manifest.version = String(doc["version"] | "");
-  manifest.url = String(doc["url"] | "");
-  manifest.sha256 = String(doc["sha256"] | "");
-  manifest.sha256.toLowerCase();
-
-  if (manifest.version.length() == 0 || manifest.url.length() == 0 || manifest.sha256.length() != 64) {
-    error = "Manifest must include version, url, and 64-character sha256";
-    return false;
-  }
-
-  set_ota_progress("manifest", 12, "Manifest loaded: " + manifest.version, manifest.version);
-  return true;
+  return false;
 }
 
 static bool perform_ota_update(const OtaManifest &manifest, String &error) {
   WiFiClientSecure client;
   HTTPClient http;
   client.setInsecure();
+  client.setHandshakeTimeout(30);
   set_ota_progress("download", 15, "Opening firmware download...", manifest.version);
 
   http.setTimeout(20000);
+  http.setReuse(false);
   http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
 
-  if (!http.begin(client, manifest.url)) {
-    error = "Unable to open firmware URL";
-    return false;
+  bool firmware_open = false;
+  for (int attempt = 1; attempt <= OTA_HTTP_ATTEMPTS; attempt++) {
+    if (!http.begin(client, manifest.url)) {
+      error = "Unable to open firmware URL";
+    } else {
+      int code = http.GET();
+      delay(1);
+
+      if (code == HTTP_CODE_OK) {
+        firmware_open = true;
+        break;
+      }
+
+      error = "Firmware request failed: HTTP " + String(code);
+      http.end();
+    }
+
+    Serial.printf("OTA firmware attempt %d failed: %s\n", attempt, error.c_str());
+    set_ota_progress("download", 15, "Retrying firmware download...", manifest.version);
+    delay(750);
+    yield_to_system();
   }
 
-  int code = http.GET();
-  delay(1);
-  if (code != HTTP_CODE_OK) {
-    error = "Firmware request failed: HTTP " + String(code);
-    http.end();
+  if (!firmware_open) {
     return false;
   }
 
@@ -835,14 +859,12 @@ static void ota_update_task(void *parameter) {
   OtaManifest manifest;
   String error;
 
-  setCpuFrequencyMhz(240);
   esp_wifi_set_ps(WIFI_PS_NONE);
   set_ota_progress("starting", 1, "Starting update...");
   yield_to_system();
 
   if (!fetch_ota_manifest(manifest, error)) {
     finish_ota_progress(false, false, error);
-    setCpuFrequencyMhz(CPU_FREQ_MHZ);
     esp_wifi_set_ps(WIFI_PS_NONE);
     vTaskDelete(nullptr);
     return;
@@ -850,7 +872,6 @@ static void ota_update_task(void *parameter) {
 
   if (compare_versions(manifest.version, FIRMWARE_VERSION) <= 0) {
     finish_ota_progress(false, false, "Already current: " + String(FIRMWARE_VERSION));
-    setCpuFrequencyMhz(CPU_FREQ_MHZ);
     esp_wifi_set_ps(WIFI_PS_NONE);
     vTaskDelete(nullptr);
     return;
@@ -861,7 +882,6 @@ static void ota_update_task(void *parameter) {
   if (!perform_ota_update(manifest, error)) {
     finish_ota_progress(false, false, error);
     restart_camera_after_ota_failure();
-    setCpuFrequencyMhz(CPU_FREQ_MHZ);
     esp_wifi_set_ps(WIFI_PS_NONE);
     vTaskDelete(nullptr);
     return;
