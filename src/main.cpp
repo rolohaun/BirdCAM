@@ -22,7 +22,7 @@ static const char *DEFAULT_WIFI_PASSWORD = "";
 
 static const char *AP_SSID = "BirdCAM";
 static const char *AP_PASSWORD = "birdcam123";
-static const char *FIRMWARE_VERSION = "0.2.0";
+static const char *FIRMWARE_VERSION = "0.2.1";
 static const char *OTA_MANIFEST_URL = "https://raw.githubusercontent.com/rolohaun/BirdCAM/main/firmware/manifest.json";
 
 // Solar-friendly defaults. The page dropdowns can still raise quality when needed.
@@ -424,7 +424,9 @@ static bool fetch_ota_manifest(OtaManifest &manifest, String &error) {
   http.setTimeout(15000);
   http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
 
-  if (!http.begin(client, OTA_MANIFEST_URL)) {
+  String manifest_url = String(OTA_MANIFEST_URL) + "?t=" + String(millis());
+
+  if (!http.begin(client, manifest_url)) {
     error = "Unable to open OTA manifest URL";
     return false;
   }
