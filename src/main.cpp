@@ -722,8 +722,8 @@ static void load_wifi_credentials() {
   Preferences preferences;
   preferences.begin("birdcam", false);
 
-  wifi_ssid = preferences.getString("ssid", "");
-  wifi_password = preferences.getString("password", "");
+  wifi_ssid = preferences.isKey("ssid") ? preferences.getString("ssid", "") : "";
+  wifi_password = preferences.isKey("password") ? preferences.getString("password", "") : "";
 
   if (wifi_ssid.length() == 0 && strlen(DEFAULT_WIFI_SSID) > 0) {
     wifi_ssid = DEFAULT_WIFI_SSID;
@@ -731,6 +731,10 @@ static void load_wifi_credentials() {
     preferences.putString("ssid", wifi_ssid);
     preferences.putString("password", wifi_password);
     Serial.println("Stored Wi-Fi credentials in NVS for future OTA firmware.");
+  } else if (wifi_ssid.length() > 0) {
+    Serial.println("Loaded Wi-Fi credentials from NVS.");
+  } else {
+    Serial.println("No Wi-Fi credentials found. Starting access point fallback.");
   }
 
   preferences.end();
