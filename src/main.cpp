@@ -25,7 +25,7 @@ static const char *DEFAULT_WIFI_PASSWORD = "";
 
 static const char *AP_SSID = "BirdCAM";
 static const char *AP_PASSWORD = "birdcam123";
-static const char *FIRMWARE_VERSION = "0.2.5";
+static const char *FIRMWARE_VERSION = "0.2.6";
 static const char *OTA_MANIFEST_URL = "https://raw.githubusercontent.com/rolohaun/BirdCAM/main/firmware/manifest.json";
 
 // Highest OV3660 snapshot defaults. QXGA is demanding, but snapshots give it
@@ -37,7 +37,7 @@ static const int CAMERA_XCLK_HZ = 10000000;
 static const unsigned long IP_PRINT_INTERVAL_MS = 300000;
 static const unsigned long SNAPSHOT_INTERVAL_MS = 5000;
 static const int SNAPSHOT_HISTORY_COUNT = 5;
-static const size_t OTA_BUFFER_SIZE = 4096;
+static const size_t OTA_BUFFER_SIZE = 1024;
 static const int OTA_TASK_STACK_SIZE = 16384;
 
 // AI Thinker ESP32-CAM pin map. Used by most ESP32-CAM-MB CH340G kits.
@@ -623,6 +623,7 @@ static bool fetch_ota_manifest(OtaManifest &manifest, String &error) {
   }
 
   int code = http.GET();
+  delay(1);
   if (code != HTTP_CODE_OK) {
     error = "Manifest request failed: HTTP " + String(code);
     http.end();
@@ -668,6 +669,7 @@ static bool perform_ota_update(const OtaManifest &manifest, String &error) {
   }
 
   int code = http.GET();
+  delay(1);
   if (code != HTTP_CODE_OK) {
     error = "Firmware request failed: HTTP " + String(code);
     http.end();
@@ -701,9 +703,10 @@ static bool perform_ota_update(const OtaManifest &manifest, String &error) {
 
     if (available > 0) {
       size_t read_size = available > OTA_BUFFER_SIZE ? OTA_BUFFER_SIZE : available;
-      int bytes_read = stream->readBytes(buffer, read_size);
+      int bytes_read = stream->read(buffer, read_size);
 
       if (bytes_read <= 0) {
+        delay(1);
         continue;
       }
 
@@ -725,11 +728,13 @@ static bool perform_ota_update(const OtaManifest &manifest, String &error) {
         if (progress > last_reported_progress) {
           last_reported_progress = progress;
           set_ota_progress("download", progress, "Downloaded " + String(written) + " of " + String(content_length) + " bytes", manifest.version);
+          Serial.printf("OTA progress: %d%% (%u/%d bytes)\n", progress, static_cast<unsigned int>(written), content_length);
         }
       } else if (written % 32768 < OTA_BUFFER_SIZE) {
         set_ota_progress("download", 50, "Downloaded " + String(written) + " bytes", manifest.version);
       }
       last_data_ms = millis();
+      delay(1);
     } else {
       if (millis() - last_data_ms > 20000) {
         error = "Firmware download timed out";
@@ -738,11 +743,12 @@ static bool perform_ota_update(const OtaManifest &manifest, String &error) {
         mbedtls_sha256_free(&sha_context);
         return false;
       }
-      delay(1);
+      delay(10);
     }
   }
 
   set_ota_progress("verify", 88, "Verifying firmware hash...", manifest.version);
+  delay(1);
   mbedtls_sha256_finish_ret(&sha_context, hash);
   mbedtls_sha256_free(&sha_context);
   http.end();
@@ -755,6 +761,7 @@ static bool perform_ota_update(const OtaManifest &manifest, String &error) {
   }
 
   set_ota_progress("finalize", 96, "Finalizing firmware update...", manifest.version);
+  delay(1);
   if (!Update.end(true)) {
     error = "OTA finalize failed: " + String(Update.errorString());
     return false;
@@ -847,7 +854,7 @@ static esp_err_t ota_start_handler(httpd_req_t *req) {
     return send_json(req, ota_status_json());
   }
 
-  BaseType_t created = xTaskCreatePinnedToCore(ota_update_task, "ota_update", OTA_TASK_STACK_SIZE, nullptr, 1, nullptr, 1);
+  BaseType_t created = xTaskCreate(ota_update_task, "ota_update", OTA_TASK_STACK_SIZE, nullptr, 1, nullptr);
   if (created != pdPASS) {
     finish_ota_progress(false, false, "Unable to start update task");
     return send_json_error(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Unable to start update task");
