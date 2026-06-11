@@ -9,6 +9,9 @@
 #include "esp_http_server.h"
 #include "esp_bt.h"
 #include "esp_wifi.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
+#include "freertos/task.h"
 #include "mbedtls/sha256.h"
 #include "ctype.h"
 #include "string.h"
@@ -22,7 +25,7 @@ static const char *DEFAULT_WIFI_PASSWORD = "";
 
 static const char *AP_SSID = "BirdCAM";
 static const char *AP_PASSWORD = "birdcam123";
-static const char *FIRMWARE_VERSION = "0.2.3";
+static const char *FIRMWARE_VERSION = "0.2.4";
 static const char *OTA_MANIFEST_URL = "https://raw.githubusercontent.com/rolohaun/BirdCAM/main/firmware/manifest.json";
 
 // Highest OV3660 snapshot defaults. QXGA is demanding, but snapshots give it
@@ -35,6 +38,7 @@ static const unsigned long IP_PRINT_INTERVAL_MS = 300000;
 static const unsigned long SNAPSHOT_INTERVAL_MS = 5000;
 static const int SNAPSHOT_HISTORY_COUNT = 5;
 static const size_t OTA_BUFFER_SIZE = 4096;
+static const int OTA_TASK_STACK_SIZE = 16384;
 
 // AI Thinker ESP32-CAM pin map. Used by most ESP32-CAM-MB CH340G kits.
 #define PWDN_GPIO_NUM 32
@@ -61,6 +65,27 @@ static String wifi_password;
 static unsigned long last_ip_print_ms = 0;
 static framesize_t current_frame_size = STREAM_FRAME_SIZE;
 static int current_jpeg_quality = STREAM_JPEG_QUALITY;
+static SemaphoreHandle_t ota_mutex = nullptr;
+
+struct OtaProgress {
+  bool running;
+  bool success;
+  bool rebooting;
+  int progress;
+  char phase[20];
+  char message[112];
+  char version[24];
+};
+
+static OtaProgress ota_progress = {
+    false,
+    false,
+    false,
+    0,
+    "idle",
+    "Idle",
+    "",
+};
 
 struct OtaManifest {
   String version;
@@ -109,6 +134,10 @@ static const char INDEX_HTML[] PROGMEM = R"rawliteral(
     .history img { width: 100%; aspect-ratio: 4 / 3; object-fit: cover; background: #050607; border: 1px solid #2b3138; opacity: 0.72; cursor: pointer; }
     .history img.active { opacity: 1; border-color: #94a3b8; }
     .status { font-size: 13px; color: #bac4cf; }
+    .progress { position: fixed; left: 12px; right: 12px; bottom: 12px; display: grid; gap: 6px; padding: 10px; background: #191d21; border: 1px solid #2b3138; border-radius: 6px; }
+    .progress-bar { height: 10px; overflow: hidden; background: #0b0d0f; border: 1px solid #3c4650; border-radius: 999px; }
+    .progress-fill { height: 100%; width: 0%; background: #9ccfd8; transition: width 180ms ease; }
+    .progress-text { font-size: 13px; color: #f5f7f9; }
   </style>
 </head>
 <body>
@@ -155,6 +184,10 @@ static const char INDEX_HTML[] PROGMEM = R"rawliteral(
       <div class="history" id="history"></div>
     </section>
   </main>
+  <div class="progress" id="ota-progress" hidden>
+    <div class="progress-bar"><div class="progress-fill" id="ota-progress-fill"></div></div>
+    <div class="progress-text" id="ota-progress-text">Preparing update...</div>
+  </div>
   <script>
     const SNAPSHOT_INTERVAL_MS = 5000;
     const SNAPSHOT_HISTORY_COUNT = 5;
@@ -166,8 +199,12 @@ static const char INDEX_HTML[] PROGMEM = R"rawliteral(
     const current = document.getElementById('current');
     const history = document.getElementById('history');
     const status = document.getElementById('status');
+    const otaProgress = document.getElementById('ota-progress');
+    const otaProgressFill = document.getElementById('ota-progress-fill');
+    const otaProgressText = document.getElementById('ota-progress-text');
     const snapshots = [];
     let snapshotTimer = null;
+    let otaPollTimer = null;
     let loadingSnapshot = false;
 
     function captureUrl() {
@@ -225,6 +262,54 @@ static const char INDEX_HTML[] PROGMEM = R"rawliteral(
       snapshotTimer = setInterval(captureSnapshot, SNAPSHOT_INTERVAL_MS);
     }
 
+    function setOtaProgress(info) {
+      otaProgress.hidden = false;
+      const progress = Math.max(0, Math.min(100, Number(info.progress || 0)));
+      otaProgressFill.style.width = progress + '%';
+      otaProgressText.textContent = progress + '% - ' + (info.message || info.phase || 'Updating...');
+      status.textContent = info.message || 'Updating...';
+    }
+
+    async function pollOtaStatus() {
+      try {
+        const response = await fetch('/ota/status?t=' + Date.now(), { cache: 'no-store' });
+        const info = await response.json();
+        if (!response.ok) throw new Error(info.error || 'Unable to read update status');
+        setOtaProgress(info);
+
+        if (info.rebooting) {
+          clearInterval(otaPollTimer);
+          otaPollTimer = null;
+          otaProgressText.textContent = '100% - Update installed. Rebooting...';
+          return;
+        }
+
+        if (!info.running) {
+          clearInterval(otaPollTimer);
+          otaPollTimer = null;
+          if (info.success) {
+            otaProgressText.textContent = '100% - Update installed. Rebooting...';
+          } else {
+            otaProgressText.textContent = 'Update failed - ' + (info.message || 'Unknown error');
+            status.textContent = otaProgressText.textContent;
+            startSnapshots();
+          }
+        }
+      } catch (err) {
+        clearInterval(otaPollTimer);
+        otaPollTimer = null;
+        otaProgress.hidden = false;
+        otaProgressText.textContent = 'Update status lost - ' + err.message;
+        status.textContent = otaProgressText.textContent;
+      }
+    }
+
+    function startOtaPolling() {
+      if (otaPollTimer) clearInterval(otaPollTimer);
+      pollOtaStatus();
+      otaPollTimer = setInterval(pollOtaStatus, 1000);
+    }
+
     async function loadSettings() {
       const response = await fetch('/settings');
       if (!response.ok) return;
@@ -271,15 +356,20 @@ static const char INDEX_HTML[] PROGMEM = R"rawliteral(
 
     updateInstall.addEventListener('click', async () => {
       updateInstall.hidden = true;
-      status.textContent = 'Installing update...';
+      status.textContent = 'Starting update...';
+      otaProgress.hidden = false;
+      otaProgressFill.style.width = '0%';
+      otaProgressText.textContent = '0% - Starting update...';
       if (snapshotTimer) clearInterval(snapshotTimer);
       try {
-        const response = await fetch('/ota/update');
+        const response = await fetch('/ota/start');
         const info = await response.json();
-        if (!response.ok) throw new Error(info.error || 'Update failed');
-        status.textContent = 'Update installed. Rebooting...';
+        if (!response.ok) throw new Error(info.error || 'Update failed to start');
+        setOtaProgress(info);
+        startOtaPolling();
       } catch (err) {
         status.textContent = err.message;
+        otaProgressText.textContent = 'Update failed - ' + err.message;
         startSnapshots();
       }
     });
@@ -369,6 +459,80 @@ static esp_err_t send_json_error(httpd_req_t *req, httpd_err_code_t status, cons
   return send_json(req, "{\"error\":\"" + json_escape(message) + "\"}");
 }
 
+static void copy_ota_text(char *destination, size_t size, const String &value) {
+  if (size == 0) {
+    return;
+  }
+
+  strncpy(destination, value.c_str(), size - 1);
+  destination[size - 1] = '\0';
+}
+
+static void set_ota_progress(const char *phase, int progress, const String &message, const String &version = "") {
+  if (!ota_mutex) {
+    ota_mutex = xSemaphoreCreateMutex();
+  }
+
+  if (ota_mutex) {
+    xSemaphoreTake(ota_mutex, portMAX_DELAY);
+  }
+
+  ota_progress.progress = progress < 0 ? 0 : (progress > 100 ? 100 : progress);
+  copy_ota_text(ota_progress.phase, sizeof(ota_progress.phase), phase);
+  copy_ota_text(ota_progress.message, sizeof(ota_progress.message), message);
+  if (version.length() > 0) {
+    copy_ota_text(ota_progress.version, sizeof(ota_progress.version), version);
+  }
+
+  if (ota_mutex) {
+    xSemaphoreGive(ota_mutex);
+  }
+}
+
+static void finish_ota_progress(bool success, bool rebooting, const String &message) {
+  if (!ota_mutex) {
+    ota_mutex = xSemaphoreCreateMutex();
+  }
+
+  if (ota_mutex) {
+    xSemaphoreTake(ota_mutex, portMAX_DELAY);
+  }
+
+  ota_progress.running = false;
+  ota_progress.success = success;
+  ota_progress.rebooting = rebooting;
+  ota_progress.progress = success ? 100 : ota_progress.progress;
+  copy_ota_text(ota_progress.phase, sizeof(ota_progress.phase), success ? "complete" : "failed");
+  copy_ota_text(ota_progress.message, sizeof(ota_progress.message), message);
+
+  if (ota_mutex) {
+    xSemaphoreGive(ota_mutex);
+  }
+}
+
+static String ota_status_json() {
+  if (!ota_mutex) {
+    ota_mutex = xSemaphoreCreateMutex();
+  }
+
+  OtaProgress snapshot;
+  if (ota_mutex) {
+    xSemaphoreTake(ota_mutex, portMAX_DELAY);
+  }
+  snapshot = ota_progress;
+  if (ota_mutex) {
+    xSemaphoreGive(ota_mutex);
+  }
+
+  return "{\"running\":" + String(snapshot.running ? "true" : "false") +
+         ",\"success\":" + String(snapshot.success ? "true" : "false") +
+         ",\"rebooting\":" + String(snapshot.rebooting ? "true" : "false") +
+         ",\"progress\":" + String(snapshot.progress) +
+         ",\"phase\":\"" + json_escape(snapshot.phase) +
+         "\",\"message\":\"" + json_escape(snapshot.message) +
+         "\",\"version\":\"" + json_escape(snapshot.version) + "\"}";
+}
+
 static int next_version_part(const char **cursor) {
   while (**cursor && !isdigit(**cursor)) {
     (*cursor)++;
@@ -423,6 +587,7 @@ static bool fetch_ota_manifest(OtaManifest &manifest, String &error) {
   WiFiClientSecure client;
   HTTPClient http;
   client.setInsecure();
+  set_ota_progress("manifest", 5, "Fetching update manifest...");
 
   http.setTimeout(15000);
   http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
@@ -461,6 +626,7 @@ static bool fetch_ota_manifest(OtaManifest &manifest, String &error) {
     return false;
   }
 
+  set_ota_progress("manifest", 12, "Manifest loaded: " + manifest.version, manifest.version);
   return true;
 }
 
@@ -468,6 +634,7 @@ static bool perform_ota_update(const OtaManifest &manifest, String &error) {
   WiFiClientSecure client;
   HTTPClient http;
   client.setInsecure();
+  set_ota_progress("download", 15, "Opening firmware download...", manifest.version);
 
   http.setTimeout(20000);
   http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
@@ -486,6 +653,7 @@ static bool perform_ota_update(const OtaManifest &manifest, String &error) {
 
   int content_length = http.getSize();
   size_t update_size = content_length > 0 ? static_cast<size_t>(content_length) : UPDATE_SIZE_UNKNOWN;
+  set_ota_progress("download", 18, content_length > 0 ? "Downloading " + String(content_length) + " bytes..." : "Downloading firmware...", manifest.version);
 
   if (!Update.begin(update_size)) {
     error = "OTA begin failed: " + String(Update.errorString());
@@ -503,6 +671,7 @@ static bool perform_ota_update(const OtaManifest &manifest, String &error) {
   size_t written = 0;
   int remaining = content_length;
   unsigned long last_data_ms = millis();
+  int last_reported_progress = 18;
 
   while (http.connected() && (remaining > 0 || remaining == -1)) {
     size_t available = stream->available();
@@ -528,6 +697,15 @@ static bool perform_ota_update(const OtaManifest &manifest, String &error) {
       if (remaining > 0) {
         remaining -= bytes_read;
       }
+      if (content_length > 0) {
+        int progress = 20 + static_cast<int>((static_cast<uint64_t>(written) * 65ULL) / static_cast<uint64_t>(content_length));
+        if (progress > last_reported_progress) {
+          last_reported_progress = progress;
+          set_ota_progress("download", progress, "Downloaded " + String(written) + " of " + String(content_length) + " bytes", manifest.version);
+        }
+      } else if (written % 32768 < OTA_BUFFER_SIZE) {
+        set_ota_progress("download", 50, "Downloaded " + String(written) + " bytes", manifest.version);
+      }
       last_data_ms = millis();
     } else {
       if (millis() - last_data_ms > 20000) {
@@ -541,6 +719,7 @@ static bool perform_ota_update(const OtaManifest &manifest, String &error) {
     }
   }
 
+  set_ota_progress("verify", 88, "Verifying firmware hash...", manifest.version);
   mbedtls_sha256_finish_ret(&sha_context, hash);
   mbedtls_sha256_free(&sha_context);
   http.end();
@@ -552,12 +731,14 @@ static bool perform_ota_update(const OtaManifest &manifest, String &error) {
     return false;
   }
 
+  set_ota_progress("finalize", 96, "Finalizing firmware update...", manifest.version);
   if (!Update.end(true)) {
     error = "OTA finalize failed: " + String(Update.errorString());
     return false;
   }
 
   Serial.printf("OTA update written: %u bytes, version %s\n", static_cast<unsigned int>(written), manifest.version.c_str());
+  set_ota_progress("complete", 100, "Update installed. Rebooting...", manifest.version);
   return true;
 }
 
@@ -576,27 +757,84 @@ static esp_err_t ota_check_handler(httpd_req_t *req) {
   return send_json(req, json);
 }
 
-static esp_err_t ota_update_handler(httpd_req_t *req) {
+static void ota_update_task(void *parameter) {
   OtaManifest manifest;
   String error;
 
+  setCpuFrequencyMhz(160);
+  esp_wifi_set_ps(WIFI_PS_NONE);
+  set_ota_progress("starting", 1, "Starting update...");
+
   if (!fetch_ota_manifest(manifest, error)) {
-    return send_json_error(req, HTTPD_500_INTERNAL_SERVER_ERROR, error);
+    finish_ota_progress(false, false, error);
+    setCpuFrequencyMhz(CPU_FREQ_MHZ);
+    esp_wifi_set_ps(WIFI_PS_MIN_MODEM);
+    vTaskDelete(nullptr);
+    return;
   }
 
   if (compare_versions(manifest.version, FIRMWARE_VERSION) <= 0) {
-    return send_json(req, "{\"updated\":false,\"message\":\"Already current\",\"current\":\"" + json_escape(FIRMWARE_VERSION) + "\"}");
+    finish_ota_progress(false, false, "Already current: " + String(FIRMWARE_VERSION));
+    setCpuFrequencyMhz(CPU_FREQ_MHZ);
+    esp_wifi_set_ps(WIFI_PS_MIN_MODEM);
+    vTaskDelete(nullptr);
+    return;
   }
 
   Serial.printf("Starting OTA update from %s to %s\n", FIRMWARE_VERSION, manifest.version.c_str());
   if (!perform_ota_update(manifest, error)) {
-    return send_json_error(req, HTTPD_500_INTERNAL_SERVER_ERROR, error);
+    finish_ota_progress(false, false, error);
+    setCpuFrequencyMhz(CPU_FREQ_MHZ);
+    esp_wifi_set_ps(WIFI_PS_MIN_MODEM);
+    vTaskDelete(nullptr);
+    return;
   }
 
-  esp_err_t result = send_json(req, "{\"updated\":true,\"version\":\"" + json_escape(manifest.version) + "\"}");
-  delay(1000);
+  finish_ota_progress(true, true, "Update installed. Rebooting...");
+  delay(2000);
   ESP.restart();
-  return result;
+}
+
+static esp_err_t ota_status_handler(httpd_req_t *req) {
+  return send_json(req, ota_status_json());
+}
+
+static esp_err_t ota_start_handler(httpd_req_t *req) {
+  if (!ota_mutex) {
+    ota_mutex = xSemaphoreCreateMutex();
+  }
+
+  bool running = false;
+  if (ota_mutex) {
+    xSemaphoreTake(ota_mutex, portMAX_DELAY);
+    running = ota_progress.running;
+    if (!running) {
+      ota_progress.running = true;
+      ota_progress.success = false;
+      ota_progress.rebooting = false;
+      ota_progress.progress = 0;
+      copy_ota_text(ota_progress.phase, sizeof(ota_progress.phase), "queued");
+      copy_ota_text(ota_progress.message, sizeof(ota_progress.message), "Update queued...");
+      copy_ota_text(ota_progress.version, sizeof(ota_progress.version), "");
+    }
+    xSemaphoreGive(ota_mutex);
+  }
+
+  if (running) {
+    return send_json(req, ota_status_json());
+  }
+
+  BaseType_t created = xTaskCreatePinnedToCore(ota_update_task, "ota_update", OTA_TASK_STACK_SIZE, nullptr, 1, nullptr, 1);
+  if (created != pdPASS) {
+    finish_ota_progress(false, false, "Unable to start update task");
+    return send_json_error(req, HTTPD_500_INTERNAL_SERVER_ERROR, "Unable to start update task");
+  }
+
+  return send_json(req, ota_status_json());
+}
+
+static esp_err_t ota_update_handler(httpd_req_t *req) {
+  return ota_start_handler(req);
 }
 
 static esp_err_t send_settings_json(httpd_req_t *req) {
@@ -844,12 +1082,24 @@ static void start_web_server() {
   ota_update_uri.method = HTTP_GET;
   ota_update_uri.handler = ota_update_handler;
 
+  httpd_uri_t ota_start_uri = {};
+  ota_start_uri.uri = "/ota/start";
+  ota_start_uri.method = HTTP_GET;
+  ota_start_uri.handler = ota_start_handler;
+
+  httpd_uri_t ota_status_uri = {};
+  ota_status_uri.uri = "/ota/status";
+  ota_status_uri.method = HTTP_GET;
+  ota_status_uri.handler = ota_status_handler;
+
   if (httpd_start(&camera_httpd, &config) == ESP_OK) {
     httpd_register_uri_handler(camera_httpd, &index_uri);
     httpd_register_uri_handler(camera_httpd, &capture_uri);
     httpd_register_uri_handler(camera_httpd, &settings_uri);
     httpd_register_uri_handler(camera_httpd, &ota_check_uri);
     httpd_register_uri_handler(camera_httpd, &ota_update_uri);
+    httpd_register_uri_handler(camera_httpd, &ota_start_uri);
+    httpd_register_uri_handler(camera_httpd, &ota_status_uri);
   }
 
 }

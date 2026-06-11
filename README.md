@@ -43,7 +43,9 @@ pio device monitor
 - `/capture` one JPEG snapshot
 - `/settings?framesize=qxga&quality=10` update snapshot settings
 - `/ota/check` check GitHub manifest for a newer firmware release
-- `/ota/update` install a newer release after SHA-256 verification
+- `/ota/start` start a background OTA install
+- `/ota/status` read OTA progress
+- `/ota/update` compatibility alias for `/ota/start`
 
 ## Snapshot Viewer
 
@@ -57,7 +59,7 @@ BirdCAM checks this manifest:
 https://raw.githubusercontent.com/rolohaun/BirdCAM/main/firmware/manifest.json
 ```
 
-The manifest points to a GitHub Release binary and includes its SHA-256 hash. The web page has `Check Update` and `Install Update` buttons.
+The manifest points to a GitHub Release binary and includes its SHA-256 hash. The web page has `Check Update` and `Install Update` buttons, with a progress bar and status/error text during installation.
 
 To publish a new OTA release from this machine:
 
