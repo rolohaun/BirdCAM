@@ -25,7 +25,7 @@ static const char *DEFAULT_WIFI_PASSWORD = "";
 
 static const char *AP_SSID = "BirdCAM";
 static const char *AP_PASSWORD = "birdcam123";
-static const char *FIRMWARE_VERSION = "0.2.11";
+static const char *FIRMWARE_VERSION = "0.2.12";
 static const char *OTA_MANIFEST_URL = "https://raw.githubusercontent.com/rolohaun/BirdCAM/main/firmware/manifest.json";
 
 // Highest OV3660 snapshot defaults. QXGA is demanding, but snapshots give it
@@ -37,6 +37,7 @@ static const int CAMERA_XCLK_HZ = 10000000;
 static const unsigned long IP_PRINT_INTERVAL_MS = 300000;
 static const unsigned long SNAPSHOT_INTERVAL_MS = 3000;
 static const int SNAPSHOT_HISTORY_COUNT = 5;
+static const size_t CAPTURE_CHUNK_SIZE = 1024;
 static const size_t OTA_BUFFER_SIZE = 1024;
 static const int OTA_TASK_STACK_SIZE = 16384;
 
@@ -969,7 +970,24 @@ static esp_err_t capture_handler(httpd_req_t *req) {
   httpd_resp_set_hdr(req, "Content-Disposition", "inline; filename=birdcam.jpg");
   httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
   httpd_resp_set_hdr(req, "Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
-  esp_err_t result = httpd_resp_send(req, reinterpret_cast<const char *>(fb->buf), fb->len);
+  Serial.printf("Capture: %u bytes\n", static_cast<unsigned int>(fb->len));
+
+  esp_err_t result = ESP_OK;
+  size_t sent = 0;
+  while (sent < fb->len && result == ESP_OK) {
+    size_t remaining = fb->len - sent;
+    size_t chunk_size = remaining > CAPTURE_CHUNK_SIZE ? CAPTURE_CHUNK_SIZE : remaining;
+    result = httpd_resp_send_chunk(req, reinterpret_cast<const char *>(fb->buf + sent), chunk_size);
+    sent += chunk_size;
+    delay(1);
+  }
+
+  if (result == ESP_OK) {
+    result = httpd_resp_send_chunk(req, nullptr, 0);
+  } else {
+    Serial.printf("Capture send failed after %u of %u bytes\n", static_cast<unsigned int>(sent), static_cast<unsigned int>(fb->len));
+  }
+
   esp_camera_fb_return(fb);
   return result;
 }
@@ -1008,10 +1026,7 @@ static bool start_camera() {
   config.fb_count = 1;
   config.frame_size = STREAM_FRAME_SIZE;
 
-  if (has_psram) {
-    config.fb_count = 2;
-    config.grab_mode = CAMERA_GRAB_LATEST;
-  } else {
+  if (!has_psram) {
     config.fb_location = CAMERA_FB_IN_DRAM;
   }
 
