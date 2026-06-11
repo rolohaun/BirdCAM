@@ -40,6 +40,7 @@ pio device monitor
 ## Useful URLs
 
 - `/` live viewing page
+- `/info` firmware version info
 - `/capture` one JPEG snapshot
 - `/settings?framesize=qxga&quality=10` update snapshot settings
 - `/ota/check` check GitHub manifest for a newer firmware release

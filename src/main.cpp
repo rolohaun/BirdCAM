@@ -25,7 +25,7 @@ static const char *DEFAULT_WIFI_PASSWORD = "";
 
 static const char *AP_SSID = "BirdCAM";
 static const char *AP_PASSWORD = "birdcam123";
-static const char *FIRMWARE_VERSION = "0.2.4";
+static const char *FIRMWARE_VERSION = "0.2.5";
 static const char *OTA_MANIFEST_URL = "https://raw.githubusercontent.com/rolohaun/BirdCAM/main/firmware/manifest.json";
 
 // Highest OV3660 snapshot defaults. QXGA is demanding, but snapshots give it
@@ -146,6 +146,7 @@ static const char INDEX_HTML[] PROGMEM = R"rawliteral(
       <div>
         <h1>BirdCAM</h1>
         <div class="status" id="status">Snapshots every 5 seconds</div>
+        <div class="status">Firmware <span id="firmware-version">...</span></div>
       </div>
       <div class="controls">
         <label>
@@ -199,6 +200,7 @@ static const char INDEX_HTML[] PROGMEM = R"rawliteral(
     const current = document.getElementById('current');
     const history = document.getElementById('history');
     const status = document.getElementById('status');
+    const firmwareVersion = document.getElementById('firmware-version');
     const otaProgress = document.getElementById('ota-progress');
     const otaProgressFill = document.getElementById('ota-progress-fill');
     const otaProgressText = document.getElementById('ota-progress-text');
@@ -310,6 +312,18 @@ static const char INDEX_HTML[] PROGMEM = R"rawliteral(
       otaPollTimer = setInterval(pollOtaStatus, 1000);
     }
 
+    async function loadInfo() {
+      try {
+        const response = await fetch('/info?t=' + Date.now(), { cache: 'no-store' });
+        const info = await response.json();
+        if (response.ok) {
+          firmwareVersion.textContent = 'v' + info.version;
+        }
+      } catch (err) {
+        firmwareVersion.textContent = 'unknown';
+      }
+    }
+
     async function loadSettings() {
       const response = await fetch('/settings');
       if (!response.ok) return;
@@ -386,6 +400,7 @@ static const char INDEX_HTML[] PROGMEM = R"rawliteral(
       }
     });
 
+    loadInfo();
     loadSettings();
     captureSnapshot();
     startSnapshots();
@@ -394,9 +409,17 @@ static const char INDEX_HTML[] PROGMEM = R"rawliteral(
 </html>
 )rawliteral";
 
+static String json_escape(const String &value);
+static esp_err_t send_json(httpd_req_t *req, const String &json);
+
 static esp_err_t index_handler(httpd_req_t *req) {
   httpd_resp_set_type(req, "text/html");
   return httpd_resp_send(req, INDEX_HTML, HTTPD_RESP_USE_STRLEN);
+}
+
+static esp_err_t info_handler(httpd_req_t *req) {
+  String json = "{\"version\":\"" + json_escape(FIRMWARE_VERSION) + "\"}";
+  return send_json(req, json);
 }
 
 static const char *frame_size_value(framesize_t frame_size) {
@@ -1062,6 +1085,11 @@ static void start_web_server() {
   index_uri.method = HTTP_GET;
   index_uri.handler = index_handler;
 
+  httpd_uri_t info_uri = {};
+  info_uri.uri = "/info";
+  info_uri.method = HTTP_GET;
+  info_uri.handler = info_handler;
+
   httpd_uri_t capture_uri = {};
   capture_uri.uri = "/capture";
   capture_uri.method = HTTP_GET;
@@ -1094,6 +1122,7 @@ static void start_web_server() {
 
   if (httpd_start(&camera_httpd, &config) == ESP_OK) {
     httpd_register_uri_handler(camera_httpd, &index_uri);
+    httpd_register_uri_handler(camera_httpd, &info_uri);
     httpd_register_uri_handler(camera_httpd, &capture_uri);
     httpd_register_uri_handler(camera_httpd, &settings_uri);
     httpd_register_uri_handler(camera_httpd, &ota_check_uri);
