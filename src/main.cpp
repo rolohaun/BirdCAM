@@ -25,7 +25,7 @@ static const char *DEFAULT_WIFI_PASSWORD = "";
 
 static const char *AP_SSID = "BirdCAM";
 static const char *AP_PASSWORD = "birdcam123";
-static const char *FIRMWARE_VERSION = "0.2.12";
+static const char *FIRMWARE_VERSION = "0.2.13";
 static const char *OTA_MANIFEST_URL = "https://raw.githubusercontent.com/rolohaun/BirdCAM/main/firmware/manifest.json";
 
 // Highest OV3660 snapshot defaults. QXGA is demanding, but snapshots give it
@@ -839,7 +839,7 @@ static void ota_update_task(void *parameter) {
   if (!fetch_ota_manifest(manifest, error)) {
     finish_ota_progress(false, false, error);
     setCpuFrequencyMhz(CPU_FREQ_MHZ);
-    esp_wifi_set_ps(WIFI_PS_MIN_MODEM);
+    esp_wifi_set_ps(WIFI_PS_NONE);
     vTaskDelete(nullptr);
     return;
   }
@@ -847,7 +847,7 @@ static void ota_update_task(void *parameter) {
   if (compare_versions(manifest.version, FIRMWARE_VERSION) <= 0) {
     finish_ota_progress(false, false, "Already current: " + String(FIRMWARE_VERSION));
     setCpuFrequencyMhz(CPU_FREQ_MHZ);
-    esp_wifi_set_ps(WIFI_PS_MIN_MODEM);
+    esp_wifi_set_ps(WIFI_PS_NONE);
     vTaskDelete(nullptr);
     return;
   }
@@ -858,7 +858,7 @@ static void ota_update_task(void *parameter) {
     finish_ota_progress(false, false, error);
     restart_camera_after_ota_failure();
     setCpuFrequencyMhz(CPU_FREQ_MHZ);
-    esp_wifi_set_ps(WIFI_PS_MIN_MODEM);
+    esp_wifi_set_ps(WIFI_PS_NONE);
     vTaskDelete(nullptr);
     return;
   }
@@ -1106,9 +1106,9 @@ static IPAddress start_wifi() {
 
   if (wifi_ssid.length() > 0) {
     WiFi.mode(WIFI_STA);
-    WiFi.setSleep(true);
+    WiFi.setSleep(false);
     WiFi.begin(wifi_ssid.c_str(), wifi_password.c_str());
-    esp_wifi_set_ps(WIFI_PS_MIN_MODEM);
+    esp_wifi_set_ps(WIFI_PS_NONE);
     Serial.printf("Connecting to Wi-Fi network %s", wifi_ssid.c_str());
 
     for (int i = 0; i < 40 && WiFi.status() != WL_CONNECTED; i++) {
@@ -1126,9 +1126,9 @@ static IPAddress start_wifi() {
   }
 
   WiFi.mode(WIFI_AP);
-  WiFi.setSleep(true);
+  WiFi.setSleep(false);
   WiFi.softAP(AP_SSID, AP_PASSWORD);
-  esp_wifi_set_ps(WIFI_PS_MIN_MODEM);
+  esp_wifi_set_ps(WIFI_PS_NONE);
   return WiFi.softAPIP();
 }
 
@@ -1219,7 +1219,7 @@ void setup() {
   Serial.println();
   Serial.println("Booting BirdCAM...");
   apply_power_saving_settings();
-  Serial.println("Power saving: Bluetooth off, CPU clock lowered, Wi-Fi modem sleep enabled");
+  Serial.println("Power saving: Bluetooth off, CPU clock lowered, Wi-Fi sleep disabled for stability");
 
   Serial.println("Starting camera...");
   if (!start_camera()) {

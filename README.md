@@ -87,7 +87,7 @@ Try `FRAMESIZE_UXGA` if QXGA is unstable, or `FRAMESIZE_VGA` / `FRAMESIZE_QVGA` 
 
 ## Solar Power Notes
 
-The firmware disables Bluetooth, lowers the CPU clock, enables Wi-Fi modem sleep, lowers the camera XCLK, reduces serial chatter, and starts with lower-bandwidth snapshots.
+The firmware disables Bluetooth, lowers the CPU clock, lowers the camera XCLK, reduces serial chatter, and uses user-triggered snapshot bursts instead of an always-open stream. Wi-Fi sleep is disabled because it was causing beacon timeouts during HTTPS/OTA checks on this board.
 
 The web page uses user-triggered snapshot bursts instead of an always-open MJPEG stream, which greatly reduces Wi-Fi traffic and camera work when nobody is watching.
 
