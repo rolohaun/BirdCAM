@@ -42,7 +42,7 @@ pio device monitor
 - `/` live viewing page
 - `/info` firmware version info
 - `/capture` one JPEG snapshot
-- `/settings?framesize=qxga&quality=10` update snapshot settings
+- `/settings?framesize=qxga` update snapshot resolution
 - `/ota/check` check GitHub manifest for a newer firmware release
 - `/ota/start` start a background OTA install
 - `/ota/status` read OTA progress
@@ -72,16 +72,16 @@ The script builds firmware, computes SHA-256, uploads the binary with GitHub CLI
 
 Before mounting the board in the birdhouse, do one USB flash with your local `src/secrets.h` present so Wi-Fi credentials are stored in NVS.
 
-## Quality and Frame Rate Tuning
+## Resolution and Quality
 
-The sketch defaults to `FRAMESIZE_QXGA` and JPEG quality `10` for maximum OV3660 snapshot quality. In `src/main.cpp`, change these values if you want a different tradeoff:
+The web page lets you choose snapshot resolution. JPEG quality is fixed at `10` for maximum OV3660 snapshot quality. In `src/main.cpp`, change these values if you want a different tradeoff:
 
 ```cpp
 static const framesize_t STREAM_FRAME_SIZE = FRAMESIZE_QXGA;
 static const int STREAM_JPEG_QUALITY = 10;
 ```
 
-Try `FRAMESIZE_UXGA` if QXGA is unstable, or `FRAMESIZE_VGA` / `FRAMESIZE_QVGA` with quality `25` for lower power and faster refreshes.
+Try `FRAMESIZE_UXGA` if QXGA is unstable, or `FRAMESIZE_VGA` / `FRAMESIZE_QVGA` with a higher `STREAM_JPEG_QUALITY` value for lower power and faster refreshes.
 
 `FRAMESIZE_QXGA` requires an OV3660 sensor. The firmware prints the detected camera PID in Serial Monitor at boot.
 

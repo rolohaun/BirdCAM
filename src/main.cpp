@@ -25,7 +25,7 @@ static const char *DEFAULT_WIFI_PASSWORD = "";
 
 static const char *AP_SSID = "BirdCAM";
 static const char *AP_PASSWORD = "birdcam123";
-static const char *FIRMWARE_VERSION = "0.2.7";
+static const char *FIRMWARE_VERSION = "0.2.8";
 static const char *OTA_MANIFEST_URL = "https://raw.githubusercontent.com/rolohaun/BirdCAM/main/firmware/manifest.json";
 
 // Highest OV3660 snapshot defaults. QXGA is demanding, but snapshots give it
@@ -64,7 +64,6 @@ static String wifi_ssid;
 static String wifi_password;
 static unsigned long last_ip_print_ms = 0;
 static framesize_t current_frame_size = STREAM_FRAME_SIZE;
-static int current_jpeg_quality = STREAM_JPEG_QUALITY;
 static SemaphoreHandle_t ota_mutex = nullptr;
 
 struct OtaProgress {
@@ -162,16 +161,6 @@ static const char INDEX_HTML[] PROGMEM = R"rawliteral(
             <option value="qqvga">QQVGA 160x120</option>
           </select>
         </label>
-        <label>
-          JPEG
-          <select id="quality">
-            <option value="10" selected>Best</option>
-            <option value="14">High</option>
-            <option value="18">Balanced</option>
-            <option value="25">Fast</option>
-            <option value="32">Fastest</option>
-          </select>
-        </label>
         <button id="snapshot" type="button">Snapshot</button>
         <button id="update-check" type="button">Check Update</button>
         <button id="update-install" type="button" hidden>Install Update</button>
@@ -192,7 +181,6 @@ static const char INDEX_HTML[] PROGMEM = R"rawliteral(
     const SNAPSHOT_INTERVAL_MS = 5000;
     const SNAPSHOT_HISTORY_COUNT = 5;
     const framesize = document.getElementById('framesize');
-    const quality = document.getElementById('quality');
     const snapshot = document.getElementById('snapshot');
     const updateCheck = document.getElementById('update-check');
     const updateInstall = document.getElementById('update-install');
@@ -371,14 +359,12 @@ static const char INDEX_HTML[] PROGMEM = R"rawliteral(
       if (!response.ok) return;
       const settings = await response.json();
       framesize.value = settings.framesize;
-      quality.value = String(settings.quality);
     }
 
     async function applySettings() {
       status.textContent = 'Applying settings...';
       const params = new URLSearchParams({
-        framesize: framesize.value,
-        quality: quality.value
+        framesize: framesize.value
       });
       const response = await fetch('/settings?' + params.toString());
       if (response.ok) {
@@ -389,7 +375,6 @@ static const char INDEX_HTML[] PROGMEM = R"rawliteral(
     }
 
     framesize.addEventListener('change', applySettings);
-    quality.addEventListener('change', applySettings);
 
     updateCheck.addEventListener('click', async () => {
       updateInstall.hidden = true;
@@ -901,7 +886,7 @@ static esp_err_t ota_update_handler(httpd_req_t *req) {
 
 static esp_err_t send_settings_json(httpd_req_t *req) {
   char response[96];
-  snprintf(response, sizeof(response), "{\"framesize\":\"%s\",\"quality\":%d}", frame_size_value(current_frame_size), current_jpeg_quality);
+  snprintf(response, sizeof(response), "{\"framesize\":\"%s\"}", frame_size_value(current_frame_size));
   httpd_resp_set_type(req, "application/json");
   httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
   return httpd_resp_sendstr(req, response);
@@ -910,7 +895,6 @@ static esp_err_t send_settings_json(httpd_req_t *req) {
 static esp_err_t settings_handler(httpd_req_t *req) {
   char query[96] = {0};
   char frame_size_value_buffer[16] = {0};
-  char quality_value_buffer[8] = {0};
   bool changed = false;
 
   if (httpd_req_get_url_query_str(req, query, sizeof(query)) != ESP_OK) {
@@ -936,21 +920,8 @@ static esp_err_t settings_handler(httpd_req_t *req) {
     }
   }
 
-  if (httpd_query_key_value(query, "quality", quality_value_buffer, sizeof(quality_value_buffer)) == ESP_OK) {
-    int requested_quality = atoi(quality_value_buffer);
-    if (requested_quality < 4 || requested_quality > 63) {
-      httpd_resp_send_err(req, HTTPD_400_BAD_REQUEST, "Invalid quality");
-      return ESP_FAIL;
-    }
-
-    if (sensor->set_quality(sensor, requested_quality) == 0) {
-      current_jpeg_quality = requested_quality;
-      changed = true;
-    }
-  }
-
   if (changed) {
-    Serial.printf("Camera settings updated: framesize=%s quality=%d\n", frame_size_value(current_frame_size), current_jpeg_quality);
+    Serial.printf("Camera settings updated: framesize=%s quality=%d\n", frame_size_value(current_frame_size), STREAM_JPEG_QUALITY);
   }
 
   return send_settings_json(req);
@@ -1034,7 +1005,6 @@ static bool start_camera() {
     sensor->set_framesize(sensor, STREAM_FRAME_SIZE);
     sensor->set_quality(sensor, STREAM_JPEG_QUALITY);
     current_frame_size = STREAM_FRAME_SIZE;
-    current_jpeg_quality = STREAM_JPEG_QUALITY;
   }
 
   return true;
