@@ -8,7 +8,6 @@
 #include "esp_camera.h"
 #include "esp_http_server.h"
 #include "esp_bt.h"
-#include "esp_task_wdt.h"
 #include "esp_wifi.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
@@ -26,7 +25,7 @@ static const char *DEFAULT_WIFI_PASSWORD = "";
 
 static const char *AP_SSID = "BirdCAM";
 static const char *AP_PASSWORD = "birdcam123";
-static const char *FIRMWARE_VERSION = "0.2.10";
+static const char *FIRMWARE_VERSION = "0.2.11";
 static const char *OTA_MANIFEST_URL = "https://raw.githubusercontent.com/rolohaun/BirdCAM/main/firmware/manifest.json";
 
 // Highest OV3660 snapshot defaults. QXGA is demanding, but snapshots give it
@@ -478,8 +477,7 @@ static void apply_power_saving_settings() {
   esp_bt_controller_mem_release(ESP_BT_MODE_BTDM);
 }
 
-static void feed_watchdog() {
-  esp_task_wdt_reset();
+static void yield_to_system() {
   delay(1);
 }
 
@@ -713,7 +711,7 @@ static bool perform_ota_update(const OtaManifest &manifest, String &error) {
   size_t update_size = content_length > 0 ? static_cast<size_t>(content_length) : UPDATE_SIZE_UNKNOWN;
   set_ota_progress("download", 18, content_length > 0 ? "Downloading " + String(content_length) + " bytes..." : "Downloading firmware...", manifest.version);
   Serial.printf("OTA size: %d bytes\n", content_length);
-  feed_watchdog();
+  yield_to_system();
 
   Serial.println("OTA begin...");
   if (!Update.begin(update_size)) {
@@ -722,7 +720,7 @@ static bool perform_ota_update(const OtaManifest &manifest, String &error) {
     return false;
   }
   Serial.println("OTA begin OK");
-  feed_watchdog();
+  yield_to_system();
 
   WiFiClient *stream = http.getStreamPtr();
   uint8_t buffer[OTA_BUFFER_SIZE];
@@ -748,9 +746,9 @@ static bool perform_ota_update(const OtaManifest &manifest, String &error) {
         continue;
       }
 
-      feed_watchdog();
+      yield_to_system();
       size_t update_written = Update.write(buffer, bytes_read);
-      feed_watchdog();
+      yield_to_system();
       if (update_written != static_cast<size_t>(bytes_read)) {
         error = "OTA write failed: " + String(Update.errorString());
         Update.abort();
@@ -832,17 +830,15 @@ static void ota_update_task(void *parameter) {
   OtaManifest manifest;
   String error;
 
-  esp_task_wdt_add(nullptr);
   setCpuFrequencyMhz(240);
   esp_wifi_set_ps(WIFI_PS_NONE);
   set_ota_progress("starting", 1, "Starting update...");
-  feed_watchdog();
+  yield_to_system();
 
   if (!fetch_ota_manifest(manifest, error)) {
     finish_ota_progress(false, false, error);
     setCpuFrequencyMhz(CPU_FREQ_MHZ);
     esp_wifi_set_ps(WIFI_PS_MIN_MODEM);
-    esp_task_wdt_delete(nullptr);
     vTaskDelete(nullptr);
     return;
   }
@@ -851,7 +847,6 @@ static void ota_update_task(void *parameter) {
     finish_ota_progress(false, false, "Already current: " + String(FIRMWARE_VERSION));
     setCpuFrequencyMhz(CPU_FREQ_MHZ);
     esp_wifi_set_ps(WIFI_PS_MIN_MODEM);
-    esp_task_wdt_delete(nullptr);
     vTaskDelete(nullptr);
     return;
   }
@@ -863,7 +858,6 @@ static void ota_update_task(void *parameter) {
     restart_camera_after_ota_failure();
     setCpuFrequencyMhz(CPU_FREQ_MHZ);
     esp_wifi_set_ps(WIFI_PS_MIN_MODEM);
-    esp_task_wdt_delete(nullptr);
     vTaskDelete(nullptr);
     return;
   }
@@ -1058,7 +1052,7 @@ static void stop_camera_for_ota() {
   esp_camera_deinit();
   camera_running = false;
   delay(100);
-  feed_watchdog();
+  yield_to_system();
 }
 
 static void restart_camera_after_ota_failure() {
