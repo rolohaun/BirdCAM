@@ -1,6 +1,6 @@
-# BirdCAM ESP32-CAM Web Viewer
+# BirdCAM ESP32-CAM Snapshot Viewer
 
-This project runs on an ESP32-CAM board with an OV3660 camera and serves a tiny web page for viewing the camera.
+This project runs on an ESP32-CAM board with an OV3660 camera and serves a tiny web page that refreshes snapshots every five seconds.
 
 ## Configure Wi-Fi
 
@@ -40,11 +40,14 @@ pio device monitor
 ## Useful URLs
 
 - `/` live viewing page
-- `:81/stream` raw MJPEG stream
 - `/capture` one JPEG snapshot
-- `/settings?framesize=vga&quality=18` update stream settings
+- `/settings?framesize=vga&quality=18` update snapshot settings
 - `/ota/check` check GitHub manifest for a newer firmware release
 - `/ota/update` install a newer release after SHA-256 verification
+
+## Snapshot Viewer
+
+The web interface fetches one JPEG every five seconds and keeps the five most recent snapshots in a thumbnail strip. It pauses snapshot polling when the browser tab is hidden and resumes when the tab is visible again.
 
 ## OTA Updates
 
@@ -75,13 +78,15 @@ static const framesize_t STREAM_FRAME_SIZE = FRAMESIZE_VGA;
 static const int STREAM_JPEG_QUALITY = 25;
 ```
 
-Try `FRAMESIZE_QVGA` for lower power and faster streaming, or `FRAMESIZE_UXGA` with quality `10` for the highest reliable quality on common ESP32-CAM boards.
+Try `FRAMESIZE_QVGA` for lower power and faster refreshes, or `FRAMESIZE_UXGA` with quality `10` for the highest reliable quality on common ESP32-CAM boards.
 
 `FRAMESIZE_QXGA` exists for OV3660 sensors in the camera library, but it is unreliable on many ESP32-CAM kits and is not supported by OV2640 modules. The firmware prints the detected camera PID in Serial Monitor at boot.
 
 ## Solar Power Notes
 
-The firmware disables Bluetooth, lowers the CPU clock, enables Wi-Fi modem sleep, lowers the camera XCLK, reduces serial chatter, and starts with a lower-bandwidth stream.
+The firmware disables Bluetooth, lowers the CPU clock, enables Wi-Fi modem sleep, lowers the camera XCLK, reduces serial chatter, and starts with lower-bandwidth snapshots.
+
+The web page uses periodic snapshots instead of an always-open MJPEG stream, which greatly reduces Wi-Fi traffic and camera work when someone is watching.
 
 The red power LED on most ESP32-CAM boards is wired directly to the power rail, so firmware cannot turn it off. To remove that draw, you would need to desolder the LED or its series resistor, or cut the LED trace.
 

@@ -7,10 +7,8 @@
 #include "WiFiClientSecure.h"
 #include "esp_camera.h"
 #include "esp_http_server.h"
-#include "esp_timer.h"
 #include "esp_bt.h"
 #include "esp_wifi.h"
-#include "img_converters.h"
 #include "mbedtls/sha256.h"
 #include "ctype.h"
 #include "string.h"
@@ -24,7 +22,7 @@ static const char *DEFAULT_WIFI_PASSWORD = "";
 
 static const char *AP_SSID = "BirdCAM";
 static const char *AP_PASSWORD = "birdcam123";
-static const char *FIRMWARE_VERSION = "0.1.0";
+static const char *FIRMWARE_VERSION = "0.2.0";
 static const char *OTA_MANIFEST_URL = "https://raw.githubusercontent.com/rolohaun/BirdCAM/main/firmware/manifest.json";
 
 // Solar-friendly defaults. The page dropdowns can still raise quality when needed.
@@ -33,6 +31,8 @@ static const int STREAM_JPEG_QUALITY = 25;  // 10 is sharper/slower, 30 is small
 static const int CPU_FREQ_MHZ = 80;
 static const int CAMERA_XCLK_HZ = 10000000;
 static const unsigned long IP_PRINT_INTERVAL_MS = 300000;
+static const unsigned long SNAPSHOT_INTERVAL_MS = 5000;
+static const int SNAPSHOT_HISTORY_COUNT = 5;
 static const size_t OTA_BUFFER_SIZE = 4096;
 
 // AI Thinker ESP32-CAM pin map. Used by most ESP32-CAM-MB CH340G kits.
@@ -54,7 +54,6 @@ static const size_t OTA_BUFFER_SIZE = 4096;
 #define PCLK_GPIO_NUM 22
 
 static httpd_handle_t camera_httpd = nullptr;
-static httpd_handle_t stream_httpd = nullptr;
 static IPAddress camera_ip;
 static String wifi_ssid;
 static String wifi_password;
@@ -101,8 +100,12 @@ static const char INDEX_HTML[] PROGMEM = R"rawliteral(
     select, button, a.button { border: 1px solid #3c4650; background: #242b31; color: #f5f7f9; border-radius: 6px; padding: 9px 12px; font-size: 14px; text-decoration: none; cursor: pointer; }
     select:hover, button:hover, a.button:hover { background: #303941; }
     [hidden] { display: none !important; }
-    .viewer { display: grid; place-items: center; padding: 12px; }
-    img { width: min(100%, 1100px); max-height: calc(100vh - 92px); object-fit: contain; background: #050607; border: 1px solid #2b3138; }
+    .viewer { display: grid; grid-template-rows: 1fr auto; gap: 10px; padding: 12px; min-height: 0; }
+    .stage { display: grid; place-items: center; min-height: 0; }
+    #current { width: min(100%, 1100px); max-height: calc(100vh - 178px); object-fit: contain; background: #050607; border: 1px solid #2b3138; }
+    .history { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; width: min(100%, 1100px); margin: 0 auto; }
+    .history img { width: 100%; aspect-ratio: 4 / 3; object-fit: cover; background: #050607; border: 1px solid #2b3138; opacity: 0.72; cursor: pointer; }
+    .history img.active { opacity: 1; border-color: #94a3b8; }
     .status { font-size: 13px; color: #bac4cf; }
   </style>
 </head>
@@ -111,7 +114,7 @@ static const char INDEX_HTML[] PROGMEM = R"rawliteral(
     <header>
       <div>
         <h1>BirdCAM</h1>
-        <div class="status" id="status">Live stream</div>
+        <div class="status" id="status">Snapshots every 5 seconds</div>
       </div>
       <div class="controls">
         <label>
@@ -139,27 +142,85 @@ static const char INDEX_HTML[] PROGMEM = R"rawliteral(
         <a class="button" href="/capture" target="_blank">Snapshot</a>
         <button id="update-check" type="button">Check Update</button>
         <button id="update-install" type="button" hidden>Install Update</button>
-        <button id="reload" type="button">Reload</button>
+        <button id="reload" type="button">Capture Now</button>
       </div>
     </header>
     <section class="viewer">
-      <img id="stream" alt="BirdCAM live stream">
+      <div class="stage">
+        <img id="current" alt="BirdCAM current snapshot">
+      </div>
+      <div class="history" id="history"></div>
     </section>
   </main>
   <script>
+    const SNAPSHOT_INTERVAL_MS = 5000;
+    const SNAPSHOT_HISTORY_COUNT = 5;
     const framesize = document.getElementById('framesize');
     const quality = document.getElementById('quality');
     const updateCheck = document.getElementById('update-check');
     const updateInstall = document.getElementById('update-install');
     const reload = document.getElementById('reload');
-    const stream = document.getElementById('stream');
+    const current = document.getElementById('current');
+    const history = document.getElementById('history');
     const status = document.getElementById('status');
+    const snapshots = [];
+    let snapshotTimer = null;
+    let loadingSnapshot = false;
 
-    function streamUrl() {
-      return location.protocol + '//' + location.hostname + ':81/stream?t=' + Date.now();
+    function captureUrl() {
+      return '/capture?t=' + Date.now();
     }
 
-    stream.src = streamUrl();
+    function setActiveSnapshot(index) {
+      current.src = snapshots[index].url;
+      [...history.children].forEach((img, childIndex) => {
+        img.classList.toggle('active', childIndex === index);
+      });
+    }
+
+    function renderHistory() {
+      history.textContent = '';
+      snapshots.forEach((snapshot, index) => {
+        const img = document.createElement('img');
+        img.src = snapshot.url;
+        img.alt = 'BirdCAM snapshot';
+        img.addEventListener('click', () => setActiveSnapshot(index));
+        if (index === 0) img.classList.add('active');
+        history.appendChild(img);
+      });
+    }
+
+    async function captureSnapshot() {
+      if (loadingSnapshot || document.hidden) return;
+      loadingSnapshot = true;
+      status.textContent = 'Capturing...';
+
+      try {
+        const response = await fetch(captureUrl(), { cache: 'no-store' });
+        if (!response.ok) throw new Error('Capture failed');
+        const blob = await response.blob();
+        const url = URL.createObjectURL(blob);
+        snapshots.unshift({ url });
+
+        while (snapshots.length > SNAPSHOT_HISTORY_COUNT) {
+          const old = snapshots.pop();
+          URL.revokeObjectURL(old.url);
+        }
+
+        renderHistory();
+        setActiveSnapshot(0);
+        status.textContent = 'Last capture ' + new Date().toLocaleTimeString();
+      } catch (err) {
+        status.textContent = err.message;
+      } finally {
+        loadingSnapshot = false;
+      }
+    }
+
+    function startSnapshots() {
+      if (snapshotTimer) clearInterval(snapshotTimer);
+      snapshotTimer = setInterval(captureSnapshot, SNAPSHOT_INTERVAL_MS);
+    }
 
     async function loadSettings() {
       const response = await fetch('/settings');
@@ -177,8 +238,8 @@ static const char INDEX_HTML[] PROGMEM = R"rawliteral(
       });
       const response = await fetch('/settings?' + params.toString());
       if (response.ok) {
-        stream.src = streamUrl();
-        status.textContent = 'Live stream';
+        status.textContent = 'Settings applied';
+        captureSnapshot();
       } else {
         status.textContent = 'Settings failed';
       }
@@ -208,7 +269,7 @@ static const char INDEX_HTML[] PROGMEM = R"rawliteral(
     updateInstall.addEventListener('click', async () => {
       updateInstall.hidden = true;
       status.textContent = 'Installing update...';
-      stream.removeAttribute('src');
+      if (snapshotTimer) clearInterval(snapshotTimer);
       try {
         const response = await fetch('/ota/update');
         const info = await response.json();
@@ -216,17 +277,25 @@ static const char INDEX_HTML[] PROGMEM = R"rawliteral(
         status.textContent = 'Update installed. Rebooting...';
       } catch (err) {
         status.textContent = err.message;
-        stream.src = streamUrl();
+        startSnapshots();
       }
     });
 
     reload.addEventListener('click', () => {
-      status.textContent = 'Reconnecting...';
-      stream.src = streamUrl();
-      setTimeout(() => status.textContent = 'Live stream', 700);
+      captureSnapshot();
+      startSnapshots();
+    });
+
+    document.addEventListener('visibilitychange', () => {
+      if (!document.hidden) {
+        captureSnapshot();
+        startSnapshots();
+      }
     });
 
     loadSettings();
+    captureSnapshot();
+    startSnapshots();
   </script>
 </body>
 </html>
@@ -592,62 +661,10 @@ static esp_err_t capture_handler(httpd_req_t *req) {
   httpd_resp_set_type(req, "image/jpeg");
   httpd_resp_set_hdr(req, "Content-Disposition", "inline; filename=birdcam.jpg");
   httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
+  httpd_resp_set_hdr(req, "Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
   esp_err_t result = httpd_resp_send(req, reinterpret_cast<const char *>(fb->buf), fb->len);
   esp_camera_fb_return(fb);
   return result;
-}
-
-static esp_err_t stream_handler(httpd_req_t *req) {
-  static const char *STREAM_CONTENT_TYPE = "multipart/x-mixed-replace;boundary=birdcam";
-  static const char *STREAM_BOUNDARY = "\r\n--birdcam\r\n";
-  static const char *STREAM_PART = "Content-Type: image/jpeg\r\nContent-Length: %u\r\nX-Timestamp: %lld.%06lld\r\n\r\n";
-
-  httpd_resp_set_type(req, STREAM_CONTENT_TYPE);
-  httpd_resp_set_hdr(req, "Access-Control-Allow-Origin", "*");
-
-  while (true) {
-    camera_fb_t *fb = esp_camera_fb_get();
-    if (!fb) {
-      Serial.println("Camera capture failed");
-      return ESP_FAIL;
-    }
-
-    uint8_t *jpg_buf = fb->buf;
-    size_t jpg_len = fb->len;
-    bool converted = false;
-
-    if (fb->format != PIXFORMAT_JPEG) {
-      converted = frame2jpg(fb, 80, &jpg_buf, &jpg_len);
-      if (!converted) {
-        esp_camera_fb_return(fb);
-        Serial.println("JPEG compression failed");
-        return ESP_FAIL;
-      }
-    }
-
-    char part_buf[96];
-    int64_t timestamp = esp_timer_get_time();
-    size_t header_len = snprintf(part_buf, sizeof(part_buf), STREAM_PART, jpg_len, timestamp / 1000000, timestamp % 1000000);
-
-    esp_err_t result = httpd_resp_send_chunk(req, STREAM_BOUNDARY, strlen(STREAM_BOUNDARY));
-    if (result == ESP_OK) {
-      result = httpd_resp_send_chunk(req, part_buf, header_len);
-    }
-    if (result == ESP_OK) {
-      result = httpd_resp_send_chunk(req, reinterpret_cast<const char *>(jpg_buf), jpg_len);
-    }
-
-    if (converted) {
-      free(jpg_buf);
-    }
-    esp_camera_fb_return(fb);
-
-    if (result != ESP_OK) {
-      break;
-    }
-  }
-
-  return ESP_OK;
 }
 
 static bool start_camera() {
@@ -780,7 +797,7 @@ static void print_camera_urls() {
   Serial.printf("CPU clock:   %d MHz\n", getCpuFrequencyMhz());
   Serial.printf("IP address:  %s\n", ip.c_str());
   Serial.printf("Web page:    http://%s/\n", ip.c_str());
-  Serial.printf("Stream URL:  http://%s:81/stream\n", ip.c_str());
+  Serial.printf("Snapshot:    http://%s/capture\n", ip.c_str());
 
   if (WiFi.getMode() == WIFI_AP) {
     Serial.printf("Wi-Fi AP:    %s\n", AP_SSID);
@@ -830,18 +847,6 @@ static void start_web_server() {
     httpd_register_uri_handler(camera_httpd, &ota_update_uri);
   }
 
-  httpd_config_t stream_config = HTTPD_DEFAULT_CONFIG();
-  stream_config.server_port = 81;
-  stream_config.ctrl_port = 32769;
-
-  httpd_uri_t stream_uri = {};
-  stream_uri.uri = "/stream";
-  stream_uri.method = HTTP_GET;
-  stream_uri.handler = stream_handler;
-
-  if (httpd_start(&stream_httpd, &stream_config) == ESP_OK) {
-    httpd_register_uri_handler(stream_httpd, &stream_uri);
-  }
 }
 
 void setup() {
