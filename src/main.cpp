@@ -22,12 +22,13 @@ static const char *DEFAULT_WIFI_PASSWORD = "";
 
 static const char *AP_SSID = "BirdCAM";
 static const char *AP_PASSWORD = "birdcam123";
-static const char *FIRMWARE_VERSION = "0.2.1";
+static const char *FIRMWARE_VERSION = "0.2.2";
 static const char *OTA_MANIFEST_URL = "https://raw.githubusercontent.com/rolohaun/BirdCAM/main/firmware/manifest.json";
 
-// Solar-friendly defaults. The page dropdowns can still raise quality when needed.
-static const framesize_t STREAM_FRAME_SIZE = FRAMESIZE_VGA;
-static const int STREAM_JPEG_QUALITY = 25;  // 10 is sharper/slower, 30 is smaller/faster.
+// Highest reliable snapshot defaults for this ESP32-CAM. QXGA is not stable on
+// this board, so UXGA is the top practical setting.
+static const framesize_t STREAM_FRAME_SIZE = FRAMESIZE_UXGA;
+static const int STREAM_JPEG_QUALITY = 10;  // 10 is sharper/slower, 30 is smaller/faster.
 static const int CPU_FREQ_MHZ = 80;
 static const int CAMERA_XCLK_HZ = 10000000;
 static const unsigned long IP_PRINT_INTERVAL_MS = 300000;
@@ -120,11 +121,11 @@ static const char INDEX_HTML[] PROGMEM = R"rawliteral(
         <label>
           Resolution
           <select id="framesize">
-            <option value="uxga">UXGA 1600x1200</option>
+            <option value="uxga" selected>UXGA 1600x1200</option>
             <option value="sxga">SXGA 1280x1024</option>
             <option value="xga">XGA 1024x768</option>
             <option value="svga">SVGA 800x600</option>
-            <option value="vga" selected>VGA 640x480</option>
+            <option value="vga">VGA 640x480</option>
             <option value="qvga">QVGA 320x240</option>
             <option value="qqvga">QQVGA 160x120</option>
           </select>
@@ -132,10 +133,10 @@ static const char INDEX_HTML[] PROGMEM = R"rawliteral(
         <label>
           JPEG
           <select id="quality">
-            <option value="10">Best</option>
+            <option value="10" selected>Best</option>
             <option value="14">High</option>
             <option value="18">Balanced</option>
-            <option value="25" selected>Fast</option>
+            <option value="25">Fast</option>
             <option value="32">Fastest</option>
           </select>
         </label>

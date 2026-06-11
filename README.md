@@ -41,7 +41,7 @@ pio device monitor
 
 - `/` live viewing page
 - `/capture` one JPEG snapshot
-- `/settings?framesize=vga&quality=18` update snapshot settings
+- `/settings?framesize=uxga&quality=10` update snapshot settings
 - `/ota/check` check GitHub manifest for a newer firmware release
 - `/ota/update` install a newer release after SHA-256 verification
 
@@ -71,14 +71,14 @@ Before mounting the board in the birdhouse, do one USB flash with your local `sr
 
 ## Quality and Frame Rate Tuning
 
-The sketch defaults to `FRAMESIZE_VGA` and JPEG quality `25` to reduce power use and Wi-Fi bandwidth. In `src/main.cpp`, change these values if you want a different tradeoff:
+The sketch defaults to `FRAMESIZE_UXGA` and JPEG quality `10` for the highest reliable snapshot quality on this board. In `src/main.cpp`, change these values if you want a different tradeoff:
 
 ```cpp
-static const framesize_t STREAM_FRAME_SIZE = FRAMESIZE_VGA;
-static const int STREAM_JPEG_QUALITY = 25;
+static const framesize_t STREAM_FRAME_SIZE = FRAMESIZE_UXGA;
+static const int STREAM_JPEG_QUALITY = 10;
 ```
 
-Try `FRAMESIZE_QVGA` for lower power and faster refreshes, or `FRAMESIZE_UXGA` with quality `10` for the highest reliable quality on common ESP32-CAM boards.
+Try `FRAMESIZE_VGA` or `FRAMESIZE_QVGA` with quality `25` for lower power and faster refreshes.
 
 `FRAMESIZE_QXGA` exists for OV3660 sensors in the camera library, but it is unreliable on many ESP32-CAM kits and is not supported by OV2640 modules. The firmware prints the detected camera PID in Serial Monitor at boot.
 
