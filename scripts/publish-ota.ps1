@@ -52,8 +52,15 @@ git add src/main.cpp firmware/manifest.json platformio.ini README.md .gitignore 
 git commit -m "Release firmware $Version"
 git push
 
-gh release view $releaseTag --repo $Repo *> $null
-if ($LASTEXITCODE -eq 0) {
+$releaseExists = $false
+try {
+  gh release view $releaseTag --repo $Repo --json tagName 2>$null 1>$null
+  $releaseExists = $LASTEXITCODE -eq 0
+} catch {
+  $releaseExists = $false
+}
+
+if ($releaseExists) {
   gh release upload $releaseTag $distBin --repo $Repo --clobber
 } else {
   gh release create $releaseTag $distBin --repo $Repo --title "BirdCAM $Version" --notes "BirdCAM firmware $Version"
