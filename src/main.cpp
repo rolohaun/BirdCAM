@@ -22,12 +22,12 @@ static const char *DEFAULT_WIFI_PASSWORD = "";
 
 static const char *AP_SSID = "BirdCAM";
 static const char *AP_PASSWORD = "birdcam123";
-static const char *FIRMWARE_VERSION = "0.2.2";
+static const char *FIRMWARE_VERSION = "0.2.3";
 static const char *OTA_MANIFEST_URL = "https://raw.githubusercontent.com/rolohaun/BirdCAM/main/firmware/manifest.json";
 
-// Highest reliable snapshot defaults for this ESP32-CAM. QXGA is not stable on
-// this board, so UXGA is the top practical setting.
-static const framesize_t STREAM_FRAME_SIZE = FRAMESIZE_UXGA;
+// Highest OV3660 snapshot defaults. QXGA is demanding, but snapshots give it
+// more breathing room than continuous streaming.
+static const framesize_t STREAM_FRAME_SIZE = FRAMESIZE_QXGA;
 static const int STREAM_JPEG_QUALITY = 10;  // 10 is sharper/slower, 30 is smaller/faster.
 static const int CPU_FREQ_MHZ = 80;
 static const int CAMERA_XCLK_HZ = 10000000;
@@ -81,6 +81,7 @@ static const FrameSizeOption FRAME_SIZE_OPTIONS[] = {
     {"xga", FRAMESIZE_XGA},
     {"sxga", FRAMESIZE_SXGA},
     {"uxga", FRAMESIZE_UXGA},
+    {"qxga", FRAMESIZE_QXGA},
 };
 
 static const char INDEX_HTML[] PROGMEM = R"rawliteral(
@@ -121,7 +122,8 @@ static const char INDEX_HTML[] PROGMEM = R"rawliteral(
         <label>
           Resolution
           <select id="framesize">
-            <option value="uxga" selected>UXGA 1600x1200</option>
+            <option value="qxga" selected>QXGA 2048x1536</option>
+            <option value="uxga">UXGA 1600x1200</option>
             <option value="sxga">SXGA 1280x1024</option>
             <option value="xga">XGA 1024x768</option>
             <option value="svga">SVGA 800x600</option>
@@ -314,7 +316,7 @@ static const char *frame_size_value(framesize_t frame_size) {
     }
   }
 
-  return "uxga";
+  return "qxga";
 }
 
 static bool parse_frame_size(const char *value, framesize_t *frame_size) {
