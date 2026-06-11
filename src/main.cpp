@@ -25,7 +25,7 @@ static const char *DEFAULT_WIFI_PASSWORD = "";
 
 static const char *AP_SSID = "BirdCAM";
 static const char *AP_PASSWORD = "birdcam123";
-static const char *FIRMWARE_VERSION = "0.2.13";
+static const char *FIRMWARE_VERSION = "0.2.14";
 static const char *OTA_MANIFEST_URL = "https://raw.githubusercontent.com/rolohaun/BirdCAM/main/firmware/manifest.json";
 
 // Highest OV3660 snapshot defaults. QXGA is demanding, but snapshots give it
@@ -123,6 +123,10 @@ static const char INDEX_HTML[] PROGMEM = R"rawliteral(
     main { min-height: 100vh; display: grid; grid-template-rows: auto 1fr; }
     header { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 16px; background: #191d21; border-bottom: 1px solid #2b3138; }
     h1 { margin: 0; font-size: 20px; font-weight: 700; }
+    .bird-b { color: #fb923c; }
+    .bird-i { color: #facc15; }
+    .bird-r { color: #4ade80; }
+    .bird-d { color: #38bdf8; }
     .controls { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; align-items: end; }
     label { display: grid; gap: 4px; font-size: 12px; color: #bac4cf; }
     select, button, a.button { border: 1px solid #3c4650; background: #242b31; color: #f5f7f9; border-radius: 6px; padding: 9px 12px; font-size: 14px; text-decoration: none; cursor: pointer; }
@@ -152,7 +156,7 @@ static const char INDEX_HTML[] PROGMEM = R"rawliteral(
   <main>
     <header>
       <div>
-        <h1>BirdCAM</h1>
+        <h1><span class="bird-b">B</span><span class="bird-i">i</span><span class="bird-r">r</span><span class="bird-d">d</span>CAM</h1>
         <div class="status" id="status">Idle</div>
         <div class="status">Firmware <span id="firmware-version">...</span></div>
       </div>
